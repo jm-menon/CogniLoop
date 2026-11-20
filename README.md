@@ -91,7 +91,7 @@ q3 (Guard):  |0⟩ ───[ H ]───[ Ry(θ_guard)]───────�
 
 ### PostgreSQL accounts, local setup, and testing
 
-The app uses regular PostgreSQL. It creates the required tables on startup. Passwords are stored as bcrypt hashes, JWTs expire after 12 hours, and each approved patient is linked to one psychologist. Psychologists approve patient accounts, download their assigned patients' transcripts, and accept or decline appointment requests. The database retains each patient's five newest chat sessions; deleting an older session also deletes its messages.
+The app uses regular PostgreSQL. It creates the required tables on startup. Passwords are stored as bcrypt hashes, JWTs expire after 5 minutes, and each approved patient is linked to one psychologist. Psychologists approve patient accounts, download their assigned patients' transcripts, and accept or decline appointment requests. The database retains each patient's five newest chat sessions; deleting an older session also deletes its messages.
 
 #### 1. Start a local PostgreSQL database
 
@@ -345,7 +345,6 @@ CogniLoop/
 │   └── app.js                      # Dynamic client with SVG Bloch spheres & circuit diagrams
 ├── Dockerfile                      # Production Docker container definition for Cloud Run
 ├── requirements.txt                # Python dependencies, including PostgreSQL and auth packages
-├── .env.example                    # PostgreSQL and JWT configuration template
 ├── loadtest/locustfile.py           # Balanced synthetic 10 psychologist / 100 patient cohort
 ├── observability/                   # Prometheus scrape config and provisioned Grafana dashboard
 ├── .dockerignore                   # Docker build exclusions

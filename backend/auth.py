@@ -75,7 +75,7 @@ def _validate_config():
 def _token(user):
     _validate_config()
     now = datetime.now(timezone.utc)
-    return jwt.encode({"sub": str(user["id"]), "iat": now, "exp": now + timedelta(hours=12)}, JWT_SECRET, algorithm="HS256")
+    return jwt.encode({"sub": str(user["id"]), "iat": now, "exp": now + timedelta(minutes=5)}, JWT_SECRET, algorithm="HS256")
 
 
 def _public_user(user):
