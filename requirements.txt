@@ -1,0 +1,8 @@
+# CogniLoop Dependencies
+# Note: CogniLoop's core Quantum Cognitive Engine and Web Server run on Python's Standard Library
+# with ZERO mandatory dependencies.
+# The following optional packages can be installed for extended features:
+
+google-genai>=0.1.1
+numpy>=1.24.0
+requests>=2.31.0
