@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import mimetypes
+import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -23,6 +24,8 @@ if BASE_DIR not in sys.path:
 
 from backend.protective_pipeline import QuantumGuardedCognitivePipeline
 from backend import auth
+from backend.metrics import record_query
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 pipeline_instance = QuantumGuardedCognitivePipeline()
@@ -97,6 +100,11 @@ class CogniLoopRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        if path == "/metrics":
+            self._set_headers(CONTENT_TYPE_LATEST)
+            self.wfile.write(generate_latest())
+            return
+
         if path == "/api/presets":
             self._set_headers("application/json")
             self.wfile.write(json.dumps({"presets": PRESET_QUERIES}).encode("utf-8"))
@@ -154,6 +162,23 @@ class CogniLoopRequestHandler(BaseHTTPRequestHandler):
                 self._json_error(403, str(exc))
             except Exception:
                 self._json_error(503, "Could not export conversation history.")
+            return
+
+        if path.startswith("/api/patients/") and path.endswith("/baseline.txt"):
+            try:
+                user = auth.authenticated_user(self.headers.get("Authorization"))
+                patient_id = int(path.split("/")[3])
+                content = auth.export_baseline_report(user, patient_id)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Disposition", f'attachment; filename="patient-{patient_id}-baseline-assessment.txt"')
+                self.end_headers()
+                self.wfile.write(content.encode("utf-8"))
+            except (ValueError, RuntimeError) as exc:
+                self._json_error(403, str(exc))
+            except Exception:
+                self._json_error(503, "Could not export the baseline assessment.")
             return
 
         # Serve static frontend files
@@ -229,6 +254,28 @@ class CogniLoopRequestHandler(BaseHTTPRequestHandler):
                 self._json_error(400, str(exc))
             return
 
+        if path == "/api/baseline":
+            try:
+                if user["role"] != "patient" or not user["psychologist_id"]:
+                    raise ValueError("A patient account with an assigned psychologist is required")
+                if auth.baseline_exists(user):
+                    raise ValueError("A baseline assessment has already been submitted")
+                if data.get("consent") is not True:
+                    raise ValueError("Consent is required before sending answers to Gemini")
+                answers = data.get("answers")
+                if not isinstance(answers, dict) or not answers or len(json.dumps(answers, ensure_ascii=False)) > 30000:
+                    raise ValueError("Complete the questionnaire before submitting")
+                report = pipeline_instance.gemini_client.generate_baseline_report(answers)
+                auth.save_baseline_report(user, report)
+                self._send_json({"success": True, "report": report}, status=201)
+            except ValueError as exc:
+                self._json_error(400, str(exc))
+            except RuntimeError as exc:
+                self._json_error(503, str(exc))
+            except Exception:
+                self._json_error(503, "Could not create the baseline report.")
+            return
+
         if path == "/api/query":
             psychologist_preview = user["role"] == "psychologist"
             if not psychologist_preview and user["approval_status"] != "approved":
@@ -243,14 +290,22 @@ class CogniLoopRequestHandler(BaseHTTPRequestHandler):
             if model:
                 pipeline_instance.gemini_client.set_model(model)
 
-            result = pipeline_instance.process(query)
+            query_started = time.perf_counter()
+            try:
+                result = pipeline_instance.process(query)
+            except Exception:
+                record_query(user["role"], "error", time.perf_counter() - query_started)
+                self._json_error(502, "Cognitive processing failed. Please retry.")
+                return
             if not psychologist_preview:
                 try:
                     session_id = auth.save_conversation(user, data.get("session_id"), query, result.get("final_answer", result.get("response", "")))
                 except Exception:
+                    record_query(user["role"], "error", time.perf_counter() - query_started)
                     self._json_error(503, "Could not save the conversation. Please retry.")
                     return
                 result["session_id"] = session_id
+            record_query(user["role"], "success", time.perf_counter() - query_started, result)
             self._send_json(result)
             return
 

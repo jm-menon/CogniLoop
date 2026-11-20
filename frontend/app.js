@@ -22,12 +22,41 @@ document.addEventListener("DOMContentLoaded", () => {
   const therapyWorkspace = document.getElementById("therapyWorkspace");
   const appNav = document.getElementById("appNav");
   const previewBanner = document.getElementById("previewBanner");
+  const baselineAssessment = document.getElementById("baselineAssessment");
+  const baselineQuestionsContainer = document.getElementById("baselineQuestions");
+  const baselineStatus = document.getElementById("baselineStatus");
+  const baselineConsent = document.getElementById("baselineConsent");
   const themeToggle = document.getElementById("themeToggle");
   const registerOnly = document.querySelectorAll(".register-only");
   let authToken = localStorage.getItem("cogniloop_auth_token") || "";
   let currentUser = null;
   let registerMode = false;
   let psychologistPreview = false;
+  const intakeSections = [
+    ["Presenting concern and goals", ["What brings you in today? Why now?", "When did this start, and has it changed over time?", "How does it affect your daily life: work, relationships, sleep, health?", "What have you tried so far, and what helped or didn’t?", "What would you like to be different after therapy?"]],
+    ["Current symptoms (baseline)", ["How has your mood been over the past two weeks? Any loss of interest or pleasure?", "Do you worry a lot, have panic episodes, or avoid certain situations?", "Any recent changes in sleep, appetite, energy, or concentration?", "Have you had periods of unusually high energy, little need for sleep, or racing thoughts?", "Any unusual experiences, such as hearing or seeing things others don’t, or feeling watched or followed?", "Any intrusive thoughts, compulsive behaviors, or rituals?"]],
+    ["Safety and risk", ["Have you had thoughts of wanting to die or ending your life? When was the last time?", "Have you ever made a plan or attempted? Do you have access to means?", "Any thoughts of harming yourself in other ways, or of harming others?", "What keeps you going? What are your reasons for living?", "Do you feel safe at home and in your relationships?"]],
+    ["Psychiatric and treatment history", ["Have you seen a therapist or psychiatrist before? What was helpful or unhelpful?", "Any prior diagnoses, hospitalizations, or medications? How did you respond?", "Is there a family history of mental health conditions, suicide, or substance use?"]],
+    ["Medical history", ["Any current medical conditions, chronic pain, or recent illnesses or injuries, including head injury?", "What medications and supplements do you take?", "How do you usually sleep?", "How are your exercise, diet, and general self-care?"]],
+    ["Substance use", ["How often do you drink alcohol? Has anyone expressed concern about it?", "Do you use cannabis, nicotine, or other substances, including non-prescribed medications?", "Has substance use affected your work, health, or relationships? Have you tried to cut down?"]],
+    ["Developmental and family background", ["Tell me about your upbringing: who raised you, and what was home like?", "How were emotions handled in your family?", "Were there significant losses, separations, moves, or hardships in childhood?", "Is there anything from your past, such as abuse, neglect, or other traumatic events, you feel is relevant? Share only what feels okay."]],
+    ["Social and relational context", ["Who is in your life now: partner, family, friends? Who can you lean on?", "How would you describe your closest relationships? Any recurring conflicts or patterns?", "Do you feel lonely or isolated?"]],
+    ["Education, work, and daily functioning", ["What’s your educational and work background? How is work going?", "Any current financial, legal, or housing stressors?", "What does a typical day look like?"]],
+    ["Strengths, values, and culture", ["What are you good at? What are you proud of?", "What gives your life meaning? What are your values or beliefs, spiritual or otherwise?", "How would you describe your cultural background, and does it shape how you see this problem?", "How do you and the people around you understand what you’re going through? What do you think is causing it?"]],
+    ["Expectations and readiness", ["What do you expect therapy to look like? Any worries about it?", "On a scale of 1–10, how ready do you feel to make changes right now?"]],
+    ["Close", ["Is there anything I haven’t asked that you think I should know?"]]
+  ];
+  intakeSections.forEach(([sectionTitle, prompts], sectionIndex) => {
+    const details = document.createElement("details"); details.className = "intake-section"; details.open = sectionIndex === 0;
+    const summary = document.createElement("summary"); summary.textContent = `${String(sectionIndex + 1).padStart(2, "0")}  ${sectionTitle}`; details.appendChild(summary);
+    prompts.forEach((prompt, questionIndex) => {
+      const key = `section_${sectionIndex + 1}_question_${questionIndex + 1}`;
+      const label = document.createElement("label"); label.className = "intake-question"; label.htmlFor = key; label.textContent = prompt;
+      const textarea = document.createElement("textarea"); textarea.id = key; textarea.dataset.answerKey = key; textarea.dataset.question = prompt; textarea.maxLength = 500; textarea.rows = 2; textarea.placeholder = "Your answer (optional)";
+      details.append(label, textarea);
+    });
+    baselineQuestionsContainer.appendChild(details);
+  });
 
   function setAuthMode(isRegister) {
     registerMode = isRegister;
@@ -49,9 +78,10 @@ document.addEventListener("DOMContentLoaded", () => {
     appNav.hidden = !user || user.role !== "patient";
     if (!user) {
       accountDashboard.hidden = true; patientProfile.hidden = true; therapyWorkspace.hidden = true;
-      previewBanner.hidden = true; psychologistPreview = false;
+      previewBanner.hidden = true; baselineAssessment.hidden = true; psychologistPreview = false;
       return;
     }
+    if (user.role === "psychologist") document.getElementById("baselinePrompt")?.remove();
     if (user.role === "patient") {
       accountDashboard.hidden = true;
       if (isNewView) {
@@ -92,6 +122,8 @@ document.addEventListener("DOMContentLoaded", () => {
   headerSignOut.addEventListener("click", signOut);
   document.getElementById("profileNav").addEventListener("click", () => { therapyWorkspace.hidden = true; patientProfile.hidden = false; });
   document.getElementById("therapyNav").addEventListener("click", () => { patientProfile.hidden = true; therapyWorkspace.hidden = false; });
+  document.getElementById("backToProfile").addEventListener("click", () => { baselineAssessment.hidden = true; patientProfile.hidden = false; });
+  document.getElementById("submitBaseline").addEventListener("click", submitBaselineAssessment);
   document.getElementById("backToDashboard").addEventListener("click", () => { psychologistPreview = false; therapyWorkspace.hidden = true; previewBanner.hidden = true; accountDashboard.hidden = false; });
   themeToggle.addEventListener("click", toggleTheme);
   function applyTheme(theme) {
@@ -137,20 +169,32 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!response.ok) throw new Error(data.error || "Could not load account");
     setSignedIn(data.user);
     if (data.user.role === "psychologist") {
-      const patientsHtml = data.patients.map((p) => `<div class="dashboard-row"><span>${escapeHtml(p.display_name)} · ${escapeHtml(p.email)} · ${escapeHtml(p.approval_status)}</span><span>${p.approval_status === "pending" ? `<button data-approve="${p.id}" data-decision="approved">Approve</button> <button data-approve="${p.id}" data-decision="declined">Decline</button>` : ""}${p.approval_status === "approved" ? ` <button data-export="${p.id}">Download conversations</button>` : ""}</span></div>`).join("") || "<p>No patients yet.</p>";
+      const patientsHtml = data.patients.map((p) => `<div class="patient-dashboard-row"><div class="dashboard-row"><span>${escapeHtml(p.display_name)} · ${escapeHtml(p.email)} · ${escapeHtml(p.approval_status)}</span><span>${p.approval_status === "pending" ? `<button data-approve="${p.id}" data-decision="approved">Approve</button> <button data-approve="${p.id}" data-decision="declined">Decline</button>` : ""}${p.approval_status === "approved" ? ` <button data-export="${p.id}">Download sessions</button>` : ""}</span></div>${p.baseline_report ? `<details class="baseline-report"><summary>Baseline Assessment · ${escapeHtml(p.baseline_report.date)}</summary>${renderBaselineReport(p.baseline_report)}<button data-baseline-export="${p.id}">Download baseline report</button></details>` : "<p class=\"baseline-missing\">Background Baseline Assessment not submitted.</p>"}</div>`).join("") || "<p>No patients yet.</p>";
       const appointmentsHtml = data.appointments.map((a) => `<div class="dashboard-row"><span>${escapeHtml(a.patient_name)} · ${new Date(a.requested_at).toLocaleString()} · ${escapeHtml(a.note)} · ${escapeHtml(a.status)}</span>${a.status === "pending" ? `<span><button data-appointment="${a.id}" data-decision="accepted">Accept</button> <button data-appointment="${a.id}" data-decision="declined">Decline</button></span>` : ""}</div>`).join("") || "<p>No appointment requests.</p>";
       accountDashboard.innerHTML = `<div class="dashboard-welcome"><p class="eyebrow">Psychologist workspace</p><h2>Welcome, ${escapeHtml(data.user.display_name)}</h2><p>Try CogniLoop and tell us what you think. We value your feedback.</p><button id="tryCogniLoop" class="btn-primary" type="button">Try CogniLoop</button><div class="feedback-box"><label for="previewFeedback">Written feedback</label><textarea id="previewFeedback" rows="3" placeholder="What would make this experience more useful?"></textarea><small>Feedback remains in this page only and is not saved.</small></div></div><h3>Patient requests</h3>${patientsHtml}<h3>Appointments</h3>${appointmentsHtml}<button id="refreshDashboard" type="button">Refresh requests</button>`;
       accountDashboard.querySelector("#tryCogniLoop").addEventListener("click", () => { psychologistPreview = true; accountDashboard.hidden = true; therapyWorkspace.hidden = false; previewBanner.hidden = false; appNav.hidden = true; });
       accountDashboard.querySelector("#refreshDashboard").addEventListener("click", loadDashboard);
     } else {
       const appointmentsHtml = data.appointments.map((a) => `<div class="dashboard-row">${new Date(a.requested_at).toLocaleString()} · ${escapeHtml(a.status)}${a.note ? ` · ${escapeHtml(a.note)}` : ""}</div>`).join("") || "<p>No appointment requests yet.</p>";
-      patientProfile.innerHTML = `<p class="eyebrow">Your profile</p><h2>${escapeHtml(data.user.display_name)}</h2><dl class="profile-details"><div><dt>Email</dt><dd>${escapeHtml(data.user.email)}</dd></div><div><dt>Psychologist</dt><dd>${escapeHtml(data.psychologist_name || "Not selected")}</dd></div><div><dt>Account status</dt><dd>${escapeHtml(data.user.approval_status)}</dd></div></dl>${data.user.approval_status === "pending" ? "<p>Your psychologist must approve your account before chat and appointments are available.</p>" : data.user.approval_status === "declined" ? "<p>Your psychologist declined this request. Please contact the clinic.</p>" : `<form id="appointmentForm" class="appointment-form"><h3>Request an appointment</h3><label>Date and time<input type="datetime-local" id="appointmentTime" required></label><input id="appointmentNote" type="text" maxlength="1000" placeholder="Optional note"><button type="submit" class="btn-primary">Send request</button></form>`}<h3>Appointment requests</h3>${appointmentsHtml}`;
+      const baselineOption = data.baseline_complete ? `<p class="baseline-complete">Background Baseline Assessment completed ${data.baseline_created_at ? `on ${new Date(data.baseline_created_at).toLocaleDateString()}` : ""}.</p>` : `<button id="openBaseline" type="button" class="btn-primary">Background Baseline Assessment</button>`;
+      patientProfile.innerHTML = `<p class="eyebrow">Your profile</p><h2>${escapeHtml(data.user.display_name)}</h2><dl class="profile-details"><div><dt>Email</dt><dd>${escapeHtml(data.user.email)}</dd></div><div><dt>Psychologist</dt><dd>${escapeHtml(data.psychologist_name || "Not selected")}</dd></div><div><dt>Account status</dt><dd>${escapeHtml(data.user.approval_status)}</dd></div></dl><section class="profile-baseline"><h3>First session</h3>${baselineOption}</section>${data.user.approval_status === "pending" ? "<p>Your psychologist must approve your account before chat and appointments are available.</p>" : data.user.approval_status === "declined" ? "<p>Your psychologist declined this request. Please contact the clinic.</p>" : `<form id="appointmentForm" class="appointment-form"><h3>Request an appointment</h3><label>Date and time<input type="datetime-local" id="appointmentTime" required></label><input id="appointmentNote" type="text" maxlength="1000" placeholder="Optional note"><button type="submit" class="btn-primary">Send request</button></form>`}<h3>Appointment requests</h3>${appointmentsHtml}`;
+      const baselineButton = document.getElementById("openBaseline");
+      if (baselineButton) baselineButton.addEventListener("click", openBaselineAssessment);
+      const baselinePrompt = document.getElementById("baselinePrompt");
+      if (baselinePrompt) baselinePrompt.remove();
+      if (!data.baseline_complete && data.user.approval_status === "approved") {
+        const prompt = document.createElement("aside"); prompt.id = "baselinePrompt"; prompt.className = "baseline-prompt";
+        prompt.innerHTML = '<div><strong>Background Baseline Assessment</strong><span>A short first-session questionnaire for your psychologist.</span></div><button type="button">Start assessment</button>';
+        prompt.querySelector("button").addEventListener("click", openBaselineAssessment);
+        therapyWorkspace.prepend(prompt);
+      }
       const appointmentForm = document.getElementById("appointmentForm");
       if (appointmentForm) appointmentForm.addEventListener("submit", requestAppointment);
     }
     accountDashboard.querySelectorAll("[data-approve]").forEach((button) => button.addEventListener("click", () => postAction("/api/patients/approval", { patient_id: button.dataset.approve, decision: button.dataset.decision })));
     accountDashboard.querySelectorAll("[data-appointment]").forEach((button) => button.addEventListener("click", () => postAction("/api/appointments/respond", { appointment_id: button.dataset.appointment, decision: button.dataset.decision })));
     accountDashboard.querySelectorAll("[data-export]").forEach((button) => button.addEventListener("click", () => downloadConversations(button.dataset.export)));
+    accountDashboard.querySelectorAll("[data-baseline-export]").forEach((button) => button.addEventListener("click", () => downloadBaselineReport(button.dataset.baselineExport)));
     return data;
   }
   async function postAction(url, body) {
@@ -168,6 +212,34 @@ document.addEventListener("DOMContentLoaded", () => {
     const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = `patient-${patientId}-conversations.txt`; link.click(); URL.revokeObjectURL(url);
   }
   function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
+  function renderBaselineReport(report) {
+    const metrics = [["General mood", report.general_mood], ["Outlook", report.outlook], ["Self esteem", report.self_esteem], ["Assertion", report.assertion], ["Stress tolerance", report.stress_tolerance]];
+    return `<dl class="baseline-report-fields">${metrics.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
+  }
+  function openBaselineAssessment() {
+    patientProfile.hidden = true; therapyWorkspace.hidden = true; appNav.hidden = true;
+    baselineAssessment.hidden = false; baselineStatus.textContent = ""; baselineConsent.checked = false;
+  }
+  async function submitBaselineAssessment() {
+    if (!baselineConsent.checked) { baselineStatus.textContent = "Please read and accept the Gemini data-use notice to continue."; return; }
+    const answers = Object.fromEntries(Array.from(baselineQuestionsContainer.querySelectorAll("textarea[data-answer-key]"), (field) => [field.dataset.answerKey, { question: field.dataset.question, answer: field.value.trim() }]));
+    if (!Object.values(answers).some((entry) => entry.answer)) { baselineStatus.textContent = "Please answer at least one question before submitting."; return; }
+    const button = document.getElementById("submitBaseline"); button.disabled = true; baselineStatus.textContent = "Preparing your report…";
+    try {
+      const response = await fetch("/api/baseline", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` }, body: JSON.stringify({ answers, consent: true }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not create the report");
+      baselineAssessment.hidden = true; patientProfile.hidden = false;
+      await loadDashboard();
+    } catch (error) {
+      baselineStatus.textContent = error.message;
+    } finally { button.disabled = false; }
+  }
+  async function downloadBaselineReport(patientId) {
+    const response = await fetch(`/api/patients/${patientId}/baseline.txt`, { headers: { "Authorization": `Bearer ${authToken}` } });
+    if (!response.ok) { const error = await response.json(); alert(error.error || "Export failed"); return; }
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = `patient-${patientId}-baseline-assessment.txt`; link.click(); URL.revokeObjectURL(url);
+  }
 
   // DOM Elements
   const queryForm = document.getElementById("queryForm");

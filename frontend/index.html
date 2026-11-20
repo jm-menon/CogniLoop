@@ -78,6 +78,14 @@
     <section class="card input-card" id="accountDashboard" hidden></section>
     <nav id="appNav" class="app-nav" hidden><button type="button" id="therapyNav">CogniLoop</button><button type="button" id="profileNav">Profile</button></nav>
     <section id="patientProfile" class="card profile-card" hidden></section>
+    <section id="baselineAssessment" class="card baseline-card" hidden>
+      <button type="button" id="backToProfile" class="quiet-button">← Back to profile</button>
+      <p class="eyebrow">First session intake</p><h2>Background Baseline Assessment</h2>
+      <p class="baseline-intro">Answer at your own pace. You can leave any question blank. This form is used to prepare a brief baseline report for your assigned psychologist.</p>
+      <div id="baselineQuestions" class="baseline-questions"></div>
+      <label class="consent-row"><input type="checkbox" id="baselineConsent"><span>I agree to send these answers to Google Gemini 3.5 Flash-Lite to create the report. Free-tier availability and limits depend on your Google project; paid-tier use may incur charges. Google says free-tier content may be used to improve its products. CogniLoop does not save these answers; it saves the generated report for your psychologist. <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">Gemini data and pricing details</a>.</span></label>
+      <div class="baseline-submit-row"><button type="button" id="submitBaseline" class="btn-primary">Generate and save report</button><p id="baselineStatus" aria-live="polite"></p></div>
+    </section>
     <section id="therapyWorkspace" hidden>
       <div id="previewBanner" class="preview-banner" hidden><span>Psychologist preview · This interaction is not saved.</span><button id="backToDashboard" type="button">Back to dashboard</button></div>
     <!-- Hero / Query Panel -->

@@ -7,6 +7,7 @@ import bcrypt
 import jwt
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
@@ -54,6 +55,14 @@ def initialize_auth_database():
             psychologist_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             requested_at TIMESTAMPTZ NOT NULL, note TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS baseline_assessments (
+            id BIGSERIAL PRIMARY KEY,
+            patient_id BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            psychologist_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            report JSONB NOT NULL,
+            model TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
 
@@ -141,13 +150,54 @@ def list_psychologists():
 def dashboard(user):
     with _connection() as conn:
         if user["role"] == "psychologist":
-            patients = conn.execute("SELECT id,display_name,email,approval_status FROM users WHERE psychologist_id=%s ORDER BY display_name", (user["id"],)).fetchall()
+            patients = conn.execute("""SELECT u.id,u.display_name,u.email,u.approval_status,
+                b.report AS baseline_report,b.created_at AS baseline_created_at
+                FROM users u LEFT JOIN baseline_assessments b ON b.patient_id=u.id
+                WHERE u.psychologist_id=%s ORDER BY u.display_name""", (user["id"],)).fetchall()
             appointments = conn.execute("""SELECT a.id,a.patient_id,p.display_name AS patient_name,a.requested_at,a.note,a.status
                 FROM appointment_requests a JOIN users p ON p.id=a.patient_id WHERE a.psychologist_id=%s ORDER BY a.requested_at""", (user["id"],)).fetchall()
             return {"patients": [dict(x) for x in patients], "appointments": [dict(x) for x in appointments]}
         psych = conn.execute("SELECT display_name FROM users WHERE id=%s", (user["psychologist_id"],)).fetchone() if user["psychologist_id"] else None
         appointments = conn.execute("SELECT id,requested_at,note,status FROM appointment_requests WHERE patient_id=%s ORDER BY created_at DESC", (user["id"],)).fetchall()
-        return {"psychologist_name": psych["display_name"] if psych else None, "appointments": [dict(x) for x in appointments]}
+        baseline = conn.execute("SELECT created_at FROM baseline_assessments WHERE patient_id=%s", (user["id"],)).fetchone()
+        return {"psychologist_name": psych["display_name"] if psych else None, "baseline_complete": bool(baseline), "baseline_created_at": baseline["created_at"] if baseline else None, "appointments": [dict(x) for x in appointments]}
+
+
+def baseline_exists(user):
+    if user["role"] != "patient" or not user["psychologist_id"]:
+        raise ValueError("Patient account with an assigned psychologist required")
+    with _connection() as conn:
+        return conn.execute("SELECT 1 FROM baseline_assessments WHERE patient_id=%s", (user["id"],)).fetchone() is not None
+
+
+def save_baseline_report(user, report):
+    if user["role"] != "patient" or not user["psychologist_id"]:
+        raise ValueError("A patient account with an assigned psychologist is required")
+    try:
+        report_fields = ("title", "date", "general_mood", "outlook", "self_esteem", "assertion", "stress_tolerance")
+        stored_report = {key: report[key] for key in report_fields}
+        with _connection() as conn:
+            conn.execute("INSERT INTO baseline_assessments (patient_id,psychologist_id,report,model) VALUES (%s,%s,%s,%s)",
+                         (user["id"], user["psychologist_id"], Jsonb(stored_report), report["model"]))
+    except psycopg.errors.UniqueViolation:
+        raise ValueError("A baseline assessment has already been submitted for this patient")
+
+
+def export_baseline_report(user, patient_id):
+    if user["role"] != "psychologist":
+        raise ValueError("Psychologist account required")
+    with _connection() as conn:
+        row = conn.execute("""SELECT u.display_name,b.report FROM baseline_assessments b
+            JOIN users u ON u.id=b.patient_id
+            WHERE b.patient_id=%s AND b.psychologist_id=%s""", (patient_id, user["id"])).fetchone()
+    if not row:
+        raise ValueError("Baseline assessment not found")
+    report = row["report"]
+    labels = (("date", "Date"), ("general_mood", "General mood"), ("outlook", "Outlook"),
+              ("self_esteem", "Self esteem"), ("assertion", "Assertion"), ("stress_tolerance", "Stress tolerance"))
+    lines = ["Baseline Assessment", f"Patient: {row['display_name']}"]
+    lines.extend(f"{label}: {report.get(key, '')}" for key, label in labels)
+    return "\n".join(lines) + "\n"
 
 
 def approve_patient(user, patient_id, decision):

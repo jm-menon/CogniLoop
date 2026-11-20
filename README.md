@@ -126,6 +126,8 @@ Set the database connection and a fresh JWT secret in the same terminal:
 ```bash
 export DATABASE_URL='postgresql://cogniloop_user:cogniloop_local_pw@127.0.0.1:5432/cogniloop'
 export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+# Required for first-time patient baseline reports; create a key in Google AI Studio.
+export GEMINI_API_KEY='YOUR_GOOGLE_AI_STUDIO_API_KEY'
 python run_app.py
 ```
 
@@ -134,10 +136,50 @@ Windows PowerShell:
 ```powershell
 $env:DATABASE_URL='postgresql://cogniloop_user:cogniloop_local_pw@127.0.0.1:5432/cogniloop'
 $env:JWT_SECRET = python -c "import secrets; print(secrets.token_urlsafe(48))"
+$env:GEMINI_API_KEY='YOUR_GOOGLE_AI_STUDIO_API_KEY'
 python run_app.py
 ```
 
 The launcher opens `http://127.0.0.1:8000`. Keep PostgreSQL running in the background. This project is Python-based and has no `package.json` or Node install step.
+
+Create a Gemini API key from [Google AI Studio](https://ai.google.dev/gemini-api/docs/get-started). The baseline uses `gemini-3.5-flash-lite`, listed with free-tier input and output on Google's [Gemini API pricing page](https://ai.google.dev/gemini-api/docs/pricing). Free-tier eligibility and quotas can vary, and paid-tier use may incur charges. Patient answers are sent to Google only after the patient checks the consent box; Google states free-tier content may be used to improve its products. CogniLoop stores the generated report in PostgreSQL, not the questionnaire answers. Do not use real clinical details unless that data-use policy is acceptable to the patient and clinic.
+
+The patient profile offers **Background Baseline Assessment** until it has been completed. The generated, persistent report contains its date, general mood, outlook, self esteem, assertion, and stress tolerance. Assigned psychologists can view it in their patient dashboard and download a text copy.
+
+### Locust load test and Grafana comparison
+
+The load test uses synthetic prompts and provisions an isolated cohort: exactly 10 psychologist users and 100 patient users, with 10 patients assigned to each psychologist. The patient group targets about 10 queries/minute total and the psychologist group targets the same rate (one request per patient every 10 minutes and one per psychologist every minute). Actual throughput can differ when requests take longer than their pacing interval. It requires a live `GEMINI_API_KEY`, uses `gemini-3.5-flash-lite` for both sides of the paired comparison, and deletes the uniquely prefixed test accounts and their cascaded session data when Locust stops normally. Use a **test database**, never production.
+
+1. Install load-test dependencies into the project virtual environment:
+   ```bash
+   pip install -r requirements-loadtest.txt
+   ```
+2. Start CogniLoop on port 8000 in one terminal (ensure your `.env` contains a test `DATABASE_URL`, `JWT_SECRET`, and `GEMINI_API_KEY`):
+   ```bash
+   HOST=0.0.0.0 PORT=8000 python backend/server.py
+   ```
+   PowerShell:
+   ```powershell
+   $env:HOST='0.0.0.0'; $env:PORT='8000'; python backend/server.py
+   ```
+3. Start Prometheus and Grafana from the project root in another terminal:
+   ```bash
+   docker compose -f observability/docker-compose.yml up -d
+   ```
+   Open Grafana at `http://localhost:3000` (login `admin` / `cogniloop-local`) and open the provisioned **CogniLoop Load & Response Proxies** dashboard. Prometheus is at `http://localhost:9090`; its scrape target is `host.docker.internal:8000/metrics`.
+4. Start the balanced headless load test from the project root in a third terminal:
+   ```bash
+   python -m locust -f loadtest/locustfile.py --host http://127.0.0.1:8000 --headless --users 110 --spawn-rate 10 --run-time 20m --csv cogniloop-load --csv-full-history
+   ```
+   To use Locust's web interface instead, omit `--headless` and `--run-time`; open `http://localhost:8089`, start 110 users at a spawn rate of 10/sec, and set the run duration as desired. Keep the same `--users 110` total so the fixed cohort remains 10 psychologists and 100 patients.
+5. Stop monitoring when finished:
+   ```bash
+   docker compose -f observability/docker-compose.yml down
+   ```
+
+The paired response panel measures wording proxies (empathy phrases, action cues, grounded language, and catastrophic wording), not actual empathy, clinical helpfulness, safety, or patient outcomes. The current comparison is raw Gemini versus CogniLoop's guided cognitive response; the app does **not** contain a quantum-trained model, and this dashboard cannot show that quantum computation improves care. Treat these charts as an engineering smoke test. A quality claim would need a prespecified rubric and blinded review by qualified clinicians. If Gemini rate limits appear, increase `LOADTEST_PSYCH_INTERVAL_SECONDS` and `LOADTEST_PATIENT_INTERVAL_SECONDS` proportionally (for example 120 and 1200) before starting Locust.
+
+If the process is force-killed before Locust's stop hook runs, remove only the synthetic accounts using the `loadtest-<run-id>-` prefix printed by Locust. Normal completion performs this cleanup automatically.
 
 #### 3. Exercise the role and approval flow locally
 
@@ -146,6 +188,7 @@ The launcher opens `http://127.0.0.1:8000`. Keep PostgreSQL running in the backg
 3. Sign out and sign back in as the psychologist. Approve the patient from the dashboard.
 4. Sign out and sign in as the patient. Send a few messages and request an appointment.
 5. Sign back in as the psychologist. Accept or decline the appointment and download the patient's conversation text file. Each exchange is labeled `patient:` and `bot:`.
+6. Sign in as the patient and open **Profile → Background Baseline Assessment**. Fill in any questions you want, review the Gemini data-use notice, and submit. Sign in as the psychologist to view the saved report in that patient's dashboard and download its text file.
 
 The app stores account/profile data, psychologist assignment, appointment requests, and conversation messages. It does not store unrelated application telemetry. Never use real patient data in local development; this basic app does not provide the controls required for regulated clinical records.
 
@@ -279,7 +322,7 @@ Open `http://localhost:8080` in your browser.
   gcloud run services replace cloudrun.yaml
   ```
 - **Optional Environment Variables**:
-  - `GEMINI_API_KEY`: Pass your Google Gemini API key via Cloud Run environment variables or Secret Manager (`--set-env-vars GEMINI_API_KEY="AIza..."`) if you want live Gemini API calls in addition to the deterministic DBT engine.
+  - `GEMINI_API_KEY`: Provide via Secret Manager. Baseline report generation requires this key and uses `gemini-3.5-flash-lite`; live cognitive replies also use it when configured.
 
 ---
 
@@ -294,7 +337,7 @@ CogniLoop/
 │   ├── cognitive_engine.py         # Neuropsychological engine with DBT context matcher
 │   ├── gemini_client.py            # Gemini client with DBT-grounded cognitive prompts
 │   ├── protective_pipeline.py      # Master orchestrator combining Gemini + Quantum Layer
-│   ├── auth.py                     # PostgreSQL roles, approvals, appointments, and chat history
+│   ├── auth.py                     # PostgreSQL roles, approvals, appointments, baseline reports, and chat history
 │   └── server.py                   # Multithreaded HTTP server with REST APIs
 ├── frontend/
 │   ├── index.html                  # Dark-mode UI with DBT Context & Quantum Inspector
@@ -303,6 +346,8 @@ CogniLoop/
 ├── Dockerfile                      # Production Docker container definition for Cloud Run
 ├── requirements.txt                # Python dependencies, including PostgreSQL and auth packages
 ├── .env.example                    # PostgreSQL and JWT configuration template
+├── loadtest/locustfile.py           # Balanced synthetic 10 psychologist / 100 patient cohort
+├── observability/                   # Prometheus scrape config and provisioned Grafana dashboard
 ├── .dockerignore                   # Docker build exclusions
 ├── cloudrun.yaml                   # Knative service specification for Cloud Run
 ├── deploy_cloud_run.bat            # 1-click Cloud Run deployment script for Windows

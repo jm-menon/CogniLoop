@@ -84,6 +84,7 @@ class QuantumGuardedCognitivePipeline:
             "query": query,
             "is_crisis": is_crisis,
             "final_answer": final_answer,
+            "protected_source": cognitive_gemini_res["source"],
             "actionable_guidance": cognitive_analysis["actionable_guidance"],
             "dbt_context_reference": cognitive_analysis.get("dbt_context_reference", {}),
             "cognitive_thinking": {

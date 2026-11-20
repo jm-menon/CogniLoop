@@ -1,0 +1,59 @@
+{
+  "id": null,
+  "uid": "cogniloop-load-eval",
+  "title": "CogniLoop Load & Response Proxies",
+  "tags": ["cogniloop", "locust", "evaluation"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Query rate by role (requests/sec)",
+      "description": "Actual successful and failed query rates seen by the app. Patient and psychologist target rates are balanced at cohort level.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum by (role, outcome) (rate(cogniloop_query_requests_total[5m]))", "legendFormat": "{{role}} / {{outcome}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Query latency p50 / p95 by role",
+      "description": "End-to-end duration includes Gemini calls and patient conversation persistence.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (role, le) (rate(cogniloop_query_duration_seconds_bucket[5m])))", "legendFormat": "p50 {{role}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (role, le) (rate(cogniloop_query_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{role}}", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 3, "type": "barchart", "title": "Response language proxies (0–1)",
+      "description": "Automated lexical indicators only: empathy-language cues, actionability cues, grounded-language cues, and catastrophic wording. These are not validated measures of empathy, clinical quality, safety, or treatment outcomes and cannot establish that CogniLoop's guided response is better.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+      "targets": [{ "expr": "sum by (variant, dimension) (rate(cogniloop_response_quality_proxy_score_sum[10m])) / sum by (variant, dimension) (rate(cogniloop_response_quality_proxy_score_count[10m]))", "legendFormat": "{{variant}} / {{dimension}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "decimals": 2 }, "overrides": [] },
+      "options": { "orientation": "horizontal", "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Paired proxy delta (guided minus raw)",
+      "description": "Each point compares the guided and raw text from the same synthetic query. Positive values mean more cue matches for empathy/actionability/grounded wording; negative values are preferable for catastrophic wording.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "targets": [{ "expr": "sum by (dimension) (rate(cogniloop_response_quality_proxy_paired_delta_sum[10m])) / sum by (dimension) (rate(cogniloop_response_quality_proxy_paired_delta_count[10m])) - 1", "legendFormat": "{{dimension}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "min": -1, "max": 1, "decimals": 2, "custom": { "axisCenteredZero": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 5, "type": "text", "title": "How to read the comparison",
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 26 },
+      "options": { "mode": "markdown", "content": "**Exploratory engineering signals, not clinical evidence.** The raw Gemini answer and CogniLoop guided answer are paired on each synthetic query. The score panel counts wording cues; it does not understand context, therapeutic fit, truth, empathy quality, or harm. A higher actionability/empathy proxy or lower catastrophic-language proxy is only a hypothesis to review. The current guided path combines a contextual cognitive prompt/engine with a quantum-inspired state model; it is not a quantum-trained model. Use blinded review by qualified clinicians and a prespecified rubric before making quality or efficacy claims. `raw_simulated` means a live Gemini raw response was unavailable; `guided_fallback` means the cognitive engine supplied the final answer." }
+    }
+  ],
+  "annotations": { "list": [] },
+  "templating": { "list": [] }
+}
