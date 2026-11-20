@@ -230,8 +230,9 @@ class CogniLoopRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/query":
-            if user["role"] != "patient" or user["approval_status"] != "approved":
-                self._json_error(403, "Only approved patients can use cognitive chat.")
+            psychologist_preview = user["role"] == "psychologist"
+            if not psychologist_preview and user["approval_status"] != "approved":
+                self._json_error(403, "Your psychologist must approve your account before you can chat.")
                 return
             query = data.get("query", "").strip()
             api_key = data.get("api_key")
@@ -243,12 +244,13 @@ class CogniLoopRequestHandler(BaseHTTPRequestHandler):
                 pipeline_instance.gemini_client.set_model(model)
 
             result = pipeline_instance.process(query)
-            try:
-                session_id = auth.save_conversation(user, data.get("session_id"), query, result.get("final_answer", result.get("response", "")))
-            except Exception:
-                self._json_error(503, "Could not save the conversation. Please retry.")
-                return
-            result["session_id"] = session_id
+            if not psychologist_preview:
+                try:
+                    session_id = auth.save_conversation(user, data.get("session_id"), query, result.get("final_answer", result.get("response", "")))
+                except Exception:
+                    self._json_error(503, "Could not save the conversation. Please retry.")
+                    return
+                result["session_id"] = session_id
             self._send_json(result)
             return
 

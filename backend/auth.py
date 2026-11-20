@@ -29,12 +29,17 @@ def initialize_auth_database():
             display_name TEXT NOT NULL DEFAULT '', psychologist_id BIGINT REFERENCES users(id),
             approval_status TEXT NOT NULL DEFAULT 'approved'
                 CHECK (approval_status IN ('approved','pending','declined')),
+            approved_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'patient'")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS psychologist_id BIGINT REFERENCES users(id)")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'approved'")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ")
+        # An approved label without an explicit approval event is legacy/default data,
+        # not evidence that a psychologist approved the patient.
+        conn.execute("UPDATE users SET approval_status='pending' WHERE role='patient' AND approval_status='approved' AND approved_at IS NULL")
         conn.execute("""CREATE TABLE IF NOT EXISTS conversation_sessions (
             id BIGSERIAL PRIMARY KEY, patient_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -149,7 +154,7 @@ def approve_patient(user, patient_id, decision):
     if user["role"] != "psychologist" or decision not in ("approved", "declined"):
         raise ValueError("Invalid patient approval action")
     with _connection() as conn:
-        result = conn.execute("UPDATE users SET approval_status=%s WHERE id=%s AND psychologist_id=%s AND role='patient' RETURNING id", (decision, patient_id, user["id"]))
+        result = conn.execute("UPDATE users SET approval_status=%s, approved_at=%s WHERE id=%s AND psychologist_id=%s AND role='patient' AND approval_status='pending' RETURNING id", (decision, datetime.now(timezone.utc) if decision == "approved" else None, patient_id, user["id"]))
         if not result.fetchone():
             raise ValueError("Patient not found for this psychologist")
 

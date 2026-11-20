@@ -10,22 +10,68 @@ document.addEventListener("DOMContentLoaded", () => {
   const authName = document.getElementById("authName");
   const authRole = document.getElementById("authRole");
   const psychologistSelect = document.getElementById("psychologistSelect");
-  const accountDashboard = document.getElementById("accountDashboard");
   const authStatus = document.getElementById("authStatus");
+  const authTitle = document.getElementById("authTitle");
+  const authSwitch = document.getElementById("authSwitch");
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
-  const logoutBtn = document.getElementById("logoutBtn");
+  const headerSignOut = document.getElementById("headerSignOut");
+  const landingView = document.getElementById("landingView");
+  const accountDashboard = document.getElementById("accountDashboard");
+  const patientProfile = document.getElementById("patientProfile");
+  const therapyWorkspace = document.getElementById("therapyWorkspace");
+  const appNav = document.getElementById("appNav");
+  const previewBanner = document.getElementById("previewBanner");
+  const themeToggle = document.getElementById("themeToggle");
+  const registerOnly = document.querySelectorAll(".register-only");
   let authToken = localStorage.getItem("cogniloop_auth_token") || "";
+  let currentUser = null;
+  let registerMode = false;
+  let psychologistPreview = false;
+
+  function setAuthMode(isRegister) {
+    registerMode = isRegister;
+    authTitle.textContent = isRegister ? "Create your account" : "Welcome back";
+    authStatus.textContent = isRegister ? "A little about you, then you’re in." : "Sign in to continue to CogniLoop.";
+    loginBtn.classList.toggle("hidden", isRegister);
+    registerBtn.classList.toggle("hidden", !isRegister);
+    authSwitch.innerHTML = isRegister ? 'Already have an account? <button type="button" id="showLoginBtn">Sign in</button>' : 'New to CogniLoop? <button type="button" id="showRegisterBtn">Create an account</button>';
+    registerOnly.forEach((field) => { field.hidden = !isRegister || (field.id === "psychologistSelect" && authRole.value !== "patient"); });
+  }
 
   function setSignedIn(user) {
-    authStatus.textContent = user ? `Signed in as ${user.email}` : "Sign in or create an account to use cognitive analysis.";
-    loginBtn.classList.toggle("hidden", !!user);
-    registerBtn.classList.toggle("hidden", !!user);
-    logoutBtn.classList.toggle("hidden", !user);
+    const isNewView = !currentUser;
+    currentUser = user;
+    document.body.classList.toggle("patient-space", !!user && user.role === "patient");
+    landingView.hidden = !!user;
+    headerSignOut.classList.toggle("hidden", !user);
+    document.querySelectorAll("[data-auth-only]").forEach((item) => item.classList.toggle("hidden", !user));
+    appNav.hidden = !user || user.role !== "patient";
+    if (!user) {
+      accountDashboard.hidden = true; patientProfile.hidden = true; therapyWorkspace.hidden = true;
+      previewBanner.hidden = true; psychologistPreview = false;
+      return;
+    }
+    if (user.role === "patient") {
+      accountDashboard.hidden = true;
+      if (isNewView) {
+        patientProfile.hidden = user.approval_status === "approved";
+        therapyWorkspace.hidden = user.approval_status !== "approved";
+      }
+      appNav.hidden = user.approval_status !== "approved";
+      previewBanner.hidden = true;
+    } else {
+      accountDashboard.hidden = false;
+      patientProfile.hidden = true;
+      therapyWorkspace.hidden = !psychologistPreview;
+      appNav.hidden = true;
+      previewBanner.hidden = !psychologistPreview;
+    }
   }
-  setSignedIn(authToken ? { email: "your account" } : null);
-  authRole.addEventListener("change", () => { psychologistSelect.hidden = authRole.value !== "patient"; });
-  psychologistSelect.hidden = authRole.value !== "patient";
+
+  setAuthMode(false);
+  setSignedIn(null);
+  authRole.addEventListener("change", () => { psychologistSelect.hidden = !registerMode || authRole.value !== "patient"; });
   fetch("/api/psychologists").then((response) => response.json()).then((data) => {
     for (const person of data.psychologists || []) {
       const option = document.createElement("option"); option.value = person.id; option.textContent = person.display_name;
@@ -35,17 +81,36 @@ document.addEventListener("DOMContentLoaded", () => {
   fetch("/api/auth/config").then((response) => response.json()).then((config) => {
     if (!config.configured) authStatus.textContent = "Server setup needed: configure DATABASE_URL and JWT_SECRET before signing in.";
   }).catch(() => {});
+
   authForm.addEventListener("submit", (event) => { event.preventDefault(); authenticate("login"); });
+  authSwitch.addEventListener("click", (event) => {
+    if (event.target.closest("#showRegisterBtn")) setAuthMode(true);
+    if (event.target.closest("#showLoginBtn")) setAuthMode(false);
+  });
   registerBtn.addEventListener("click", () => authenticate("register"));
-  logoutBtn.addEventListener("click", () => {
-    authToken = "";
+  authRole.addEventListener("change", () => setAuthMode(registerMode));
+  headerSignOut.addEventListener("click", signOut);
+  document.getElementById("profileNav").addEventListener("click", () => { therapyWorkspace.hidden = true; patientProfile.hidden = false; });
+  document.getElementById("therapyNav").addEventListener("click", () => { patientProfile.hidden = true; therapyWorkspace.hidden = false; });
+  document.getElementById("backToDashboard").addEventListener("click", () => { psychologistPreview = false; therapyWorkspace.hidden = true; previewBanner.hidden = true; accountDashboard.hidden = false; });
+  themeToggle.addEventListener("click", toggleTheme);
+  function applyTheme(theme) {
+    document.body.classList.toggle("light-theme", theme === "light");
+    document.body.classList.toggle("dark-theme", theme !== "light");
+    themeToggle.textContent = theme === "light" ? "🌙" : "☀️";
+    localStorage.setItem("cogniloop_theme", theme);
+  }
+  function toggleTheme() { applyTheme(document.body.classList.contains("light-theme") ? "dark" : "light"); }
+  applyTheme(localStorage.getItem("cogniloop_theme") || "light");
+  function signOut() {
+    authToken = ""; currentUser = null; psychologistPreview = false;
     localStorage.removeItem("cogniloop_auth_token");
     localStorage.removeItem("cogniloop_session_id");
-    setSignedIn(null);
-    accountDashboard.hidden = true;
-  });
+    setSignedIn(null); setAuthMode(false);
+  }
+
   async function authenticate(action) {
-    authStatus.textContent = "Connecting to PostgreSQL…";
+    authStatus.textContent = "Connecting securely…";
     try {
       const payload = { email: authEmail.value, password: authPassword.value };
       if (action === "register") {
@@ -56,36 +121,36 @@ document.addEventListener("DOMContentLoaded", () => {
       const response = await fetch(`/api/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not sign in");
-      authToken = result.token;
-      localStorage.setItem("cogniloop_auth_token", authToken);
+      authToken = result.token; localStorage.setItem("cogniloop_auth_token", authToken);
       authPassword.value = "";
-      setSignedIn(result.user);
+      psychologistPreview = false;
+      if (result.user.role === "psychologist") localStorage.removeItem("cogniloop_session_id");
       if (result.user.role === "patient") localStorage.removeItem("cogniloop_session_id");
       await loadDashboard();
       if (result.user.role === "patient" && result.user.approval_status === "approved") executeCognitivePipeline(queryInput.value.trim());
     } catch (error) { authStatus.textContent = error.message; }
   }
+
   async function loadDashboard() {
     const response = await fetch("/api/dashboard", { headers: { "Authorization": `Bearer ${authToken}` } });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Could not load account");
     setSignedIn(data.user);
-    accountDashboard.hidden = false;
     if (data.user.role === "psychologist") {
       const patientsHtml = data.patients.map((p) => `<div class="dashboard-row"><span>${escapeHtml(p.display_name)} · ${escapeHtml(p.email)} · ${escapeHtml(p.approval_status)}</span><span>${p.approval_status === "pending" ? `<button data-approve="${p.id}" data-decision="approved">Approve</button> <button data-approve="${p.id}" data-decision="declined">Decline</button>` : ""}${p.approval_status === "approved" ? ` <button data-export="${p.id}">Download conversations</button>` : ""}</span></div>`).join("") || "<p>No patients yet.</p>";
       const appointmentsHtml = data.appointments.map((a) => `<div class="dashboard-row"><span>${escapeHtml(a.patient_name)} · ${new Date(a.requested_at).toLocaleString()} · ${escapeHtml(a.note)} · ${escapeHtml(a.status)}</span>${a.status === "pending" ? `<span><button data-appointment="${a.id}" data-decision="accepted">Accept</button> <button data-appointment="${a.id}" data-decision="declined">Decline</button></span>` : ""}</div>`).join("") || "<p>No appointment requests.</p>";
-      accountDashboard.innerHTML = `<h2>Psychologist dashboard</h2><h3>Patients</h3>${patientsHtml}<h3>Appointment requests</h3>${appointmentsHtml}`;
+      accountDashboard.innerHTML = `<div class="dashboard-welcome"><p class="eyebrow">Psychologist workspace</p><h2>Welcome, ${escapeHtml(data.user.display_name)}</h2><p>Try CogniLoop and tell us what you think. We value your feedback.</p><button id="tryCogniLoop" class="btn-primary" type="button">Try CogniLoop</button><div class="feedback-box"><label for="previewFeedback">Written feedback</label><textarea id="previewFeedback" rows="3" placeholder="What would make this experience more useful?"></textarea><small>Feedback remains in this page only and is not saved.</small></div></div><h3>Patient requests</h3>${patientsHtml}<h3>Appointments</h3>${appointmentsHtml}<button id="refreshDashboard" type="button">Refresh requests</button>`;
+      accountDashboard.querySelector("#tryCogniLoop").addEventListener("click", () => { psychologistPreview = true; accountDashboard.hidden = true; therapyWorkspace.hidden = false; previewBanner.hidden = false; appNav.hidden = true; });
+      accountDashboard.querySelector("#refreshDashboard").addEventListener("click", loadDashboard);
     } else {
       const appointmentsHtml = data.appointments.map((a) => `<div class="dashboard-row">${new Date(a.requested_at).toLocaleString()} · ${escapeHtml(a.status)}${a.note ? ` · ${escapeHtml(a.note)}` : ""}</div>`).join("") || "<p>No appointment requests yet.</p>";
-      accountDashboard.innerHTML = `<h2>Patient account</h2><p>Psychologist: ${escapeHtml(data.psychologist_name || "Not selected")}</p><p>Approval: ${escapeHtml(data.user.approval_status)}</p>${data.user.approval_status === "pending" ? "<p>Your psychologist must approve your account before chat and appointments are available.</p>" : data.user.approval_status === "declined" ? "<p>Your psychologist declined this request. Contact the clinic to resolve it.</p>" : `<form id="appointmentForm"><label>Request an appointment <input type="datetime-local" id="appointmentTime" required></label><input id="appointmentNote" type="text" maxlength="1000" placeholder="Optional note"><button type="submit">Send request</button></form>`}<h3>Appointment requests</h3>${appointmentsHtml}`;
+      patientProfile.innerHTML = `<p class="eyebrow">Your profile</p><h2>${escapeHtml(data.user.display_name)}</h2><dl class="profile-details"><div><dt>Email</dt><dd>${escapeHtml(data.user.email)}</dd></div><div><dt>Psychologist</dt><dd>${escapeHtml(data.psychologist_name || "Not selected")}</dd></div><div><dt>Account status</dt><dd>${escapeHtml(data.user.approval_status)}</dd></div></dl>${data.user.approval_status === "pending" ? "<p>Your psychologist must approve your account before chat and appointments are available.</p>" : data.user.approval_status === "declined" ? "<p>Your psychologist declined this request. Please contact the clinic.</p>" : `<form id="appointmentForm" class="appointment-form"><h3>Request an appointment</h3><label>Date and time<input type="datetime-local" id="appointmentTime" required></label><input id="appointmentNote" type="text" maxlength="1000" placeholder="Optional note"><button type="submit" class="btn-primary">Send request</button></form>`}<h3>Appointment requests</h3>${appointmentsHtml}`;
       const appointmentForm = document.getElementById("appointmentForm");
       if (appointmentForm) appointmentForm.addEventListener("submit", requestAppointment);
     }
     accountDashboard.querySelectorAll("[data-approve]").forEach((button) => button.addEventListener("click", () => postAction("/api/patients/approval", { patient_id: button.dataset.approve, decision: button.dataset.decision })));
     accountDashboard.querySelectorAll("[data-appointment]").forEach((button) => button.addEventListener("click", () => postAction("/api/appointments/respond", { appointment_id: button.dataset.appointment, decision: button.dataset.decision })));
     accountDashboard.querySelectorAll("[data-export]").forEach((button) => button.addEventListener("click", () => downloadConversations(button.dataset.export)));
-    const refresh = document.createElement("button"); refresh.type = "button"; refresh.textContent = "Refresh dashboard";
-    refresh.addEventListener("click", () => loadDashboard()); accountDashboard.prepend(refresh);
     return data;
   }
   async function postAction(url, body) {
@@ -103,6 +168,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = `patient-${patientId}-conversations.txt`; link.click(); URL.revokeObjectURL(url);
   }
   function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
+
   // DOM Elements
   const queryForm = document.getElementById("queryForm");
   const queryInput = document.getElementById("queryInput");
