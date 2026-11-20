@@ -89,15 +89,81 @@ q3 (Guard):  |0⟩ ───[ H ]───[ Ry(θ_guard)]───────�
 
 ## 🚀 How to Run the App
 
-### Option A: Double-Click (Windows)
-Double-click `run_app.bat` in this directory.
+### PostgreSQL accounts, local setup, and testing
 
-### Option B: Terminal Command
-Run in PowerShell or Command Prompt:
+The app uses regular PostgreSQL. It creates the required tables on startup. Passwords are stored as bcrypt hashes, JWTs expire after 12 hours, and each approved patient is linked to one psychologist. Psychologists approve patient accounts, download their assigned patients' transcripts, and accept or decline appointment requests. The database retains each patient's five newest chat sessions; deleting an older session also deletes its messages.
+
+#### 1. Start a local PostgreSQL database
+
+The quickest cross-platform option is Docker:
+
+```bash
+docker run --name cogniloop-postgres -e POSTGRES_USER=cogniloop_user -e POSTGRES_PASSWORD=cogniloop_local_pw -e POSTGRES_DB=cogniloop -p 5432:5432 -d postgres:16
+```
+
+Or install PostgreSQL 16+ directly (macOS: `brew install postgresql@16`; Ubuntu/Debian: `sudo apt install postgresql`; Windows: use the PostgreSQL installer from postgresql.org), start its service, then create a database and user:
+
+```sql
+CREATE USER cogniloop_user WITH PASSWORD 'cogniloop_local_pw';
+CREATE DATABASE cogniloop OWNER cogniloop_user;
+```
+
+#### 2. Install Python requirements and launch
+
+Python 3.11+ is recommended. From the project directory:
+
+```bash
+python3 -m venv .venv
+# macOS/Linux
+source .venv/bin/activate
+# Windows PowerShell instead: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Set the database connection and a fresh JWT secret in the same terminal:
+
+```bash
+export DATABASE_URL='postgresql://cogniloop_user:cogniloop_local_pw@127.0.0.1:5432/cogniloop'
+export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+python run_app.py
+```
+
+Windows PowerShell:
+
+```powershell
+$env:DATABASE_URL='postgresql://cogniloop_user:cogniloop_local_pw@127.0.0.1:5432/cogniloop'
+$env:JWT_SECRET = python -c "import secrets; print(secrets.token_urlsafe(48))"
+python run_app.py
+```
+
+The launcher opens `http://127.0.0.1:8000`. Keep PostgreSQL running in the background. This project is Python-based and has no `package.json` or Node install step.
+
+#### 3. Exercise the role and approval flow locally
+
+1. Register a **Psychologist** account with a name, email, and password of at least 12 characters.
+2. Sign out, register a **Patient** account, and select that psychologist from the list. The patient's status should show as pending; chat and appointment requests are disabled until approval.
+3. Sign out and sign back in as the psychologist. Approve the patient from the dashboard.
+4. Sign out and sign in as the patient. Send a few messages and request an appointment.
+5. Sign back in as the psychologist. Accept or decline the appointment and download the patient's conversation text file. Each exchange is labeled `patient:` and `bot:`.
+
+The app stores account/profile data, psychologist assignment, appointment requests, and conversation messages. It does not store unrelated application telemetry. Never use real patient data in local development; this basic app does not provide the controls required for regulated clinical records.
+
+For production PostgreSQL, set `DATABASE_URL` and `JWT_SECRET` through a secrets manager and restrict database access to the app. Keep credentials out of source control.
+
+### Local launcher (Windows)
+
+Double-click `run_app.bat` after PostgreSQL is running and environment variables are configured.
+
+### Terminal command
+
+Run:
 ```bash
 python run_app.py
 ```
-This automatically starts the server at `http://127.0.0.1:8000` and opens your default browser!
+
+
+
 
 ---
 
@@ -146,7 +212,7 @@ CogniLoop integrates `database/dbt_therapy_guidelines_qr_database.json` as an au
 
 ## ☁️ Deploying to Google Cloud Run
 
-CogniLoop is containerized and pre-configured for **Google Cloud Run**. Because it uses Python standard library without heavy dependencies, the container image is ultra-lightweight (< 140MB), cold starts take < 200ms, and it scales from 0 to 10 instances on demand with minimal cost.
+CogniLoop includes a container configuration for **Google Cloud Run**. The container installs the Python requirements listed in `requirements.txt`. Configure a reachable PostgreSQL database and provide `DATABASE_URL` and `JWT_SECRET` through Cloud Run secrets before using account features.
 
 ### Option 1: 1-Click Deploy via Google Cloud Shell (No Local Installation)
 1. Open [Google Cloud Shell](https://shell.cloud.google.com) in your browser.
@@ -168,7 +234,7 @@ CogniLoop is containerized and pre-configured for **Google Cloud Run**. Because 
      --memory 512Mi \
      --cpu 1
    ```
-4. Cloud Build will build the container, execute the test suite, and output your live HTTPS URL (e.g., `https://cogniloop-xxxxx-uc.a.run.app`).
+4. Cloud Build will build the container and output your live HTTPS URL (e.g., `https://cogniloop-xxxxx-uc.a.run.app`).
 
 ---
 
@@ -228,12 +294,15 @@ CogniLoop/
 │   ├── cognitive_engine.py         # Neuropsychological engine with DBT context matcher
 │   ├── gemini_client.py            # Gemini client with DBT-grounded cognitive prompts
 │   ├── protective_pipeline.py      # Master orchestrator combining Gemini + Quantum Layer
+│   ├── auth.py                     # PostgreSQL roles, approvals, appointments, and chat history
 │   └── server.py                   # Multithreaded HTTP server with REST APIs
 ├── frontend/
 │   ├── index.html                  # Dark-mode UI with DBT Context & Quantum Inspector
 │   ├── style.css                   # Glassmorphic CSS styling & DBT step flow
 │   └── app.js                      # Dynamic client with SVG Bloch spheres & circuit diagrams
 ├── Dockerfile                      # Production Docker container definition for Cloud Run
+├── requirements.txt                # Python dependencies, including PostgreSQL and auth packages
+├── .env.example                    # PostgreSQL and JWT configuration template
 ├── .dockerignore                   # Docker build exclusions
 ├── cloudrun.yaml                   # Knative service specification for Cloud Run
 ├── deploy_cloud_run.bat            # 1-click Cloud Run deployment script for Windows
@@ -242,6 +311,3 @@ CogniLoop/
 ├── run_app.bat                     # 1-click Windows launcher
 └── test_pipeline.py                # Comprehensive test suite (Quantum, DBT Matching, Crisis)
 ```
-#   C o g n i L o o p  
- #   C o g n i L o o p  
- 

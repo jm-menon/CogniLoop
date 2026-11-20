@@ -4,6 +4,105 @@
  */
 
 document.addEventListener("DOMContentLoaded", () => {
+  const authForm = document.getElementById("authForm");
+  const authEmail = document.getElementById("authEmail");
+  const authPassword = document.getElementById("authPassword");
+  const authName = document.getElementById("authName");
+  const authRole = document.getElementById("authRole");
+  const psychologistSelect = document.getElementById("psychologistSelect");
+  const accountDashboard = document.getElementById("accountDashboard");
+  const authStatus = document.getElementById("authStatus");
+  const loginBtn = document.getElementById("loginBtn");
+  const registerBtn = document.getElementById("registerBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
+  let authToken = localStorage.getItem("cogniloop_auth_token") || "";
+
+  function setSignedIn(user) {
+    authStatus.textContent = user ? `Signed in as ${user.email}` : "Sign in or create an account to use cognitive analysis.";
+    loginBtn.classList.toggle("hidden", !!user);
+    registerBtn.classList.toggle("hidden", !!user);
+    logoutBtn.classList.toggle("hidden", !user);
+  }
+  setSignedIn(authToken ? { email: "your account" } : null);
+  authRole.addEventListener("change", () => { psychologistSelect.hidden = authRole.value !== "patient"; });
+  psychologistSelect.hidden = authRole.value !== "patient";
+  fetch("/api/psychologists").then((response) => response.json()).then((data) => {
+    for (const person of data.psychologists || []) {
+      const option = document.createElement("option"); option.value = person.id; option.textContent = person.display_name;
+      psychologistSelect.appendChild(option);
+    }
+  }).catch(() => {});
+  fetch("/api/auth/config").then((response) => response.json()).then((config) => {
+    if (!config.configured) authStatus.textContent = "Server setup needed: configure DATABASE_URL and JWT_SECRET before signing in.";
+  }).catch(() => {});
+  authForm.addEventListener("submit", (event) => { event.preventDefault(); authenticate("login"); });
+  registerBtn.addEventListener("click", () => authenticate("register"));
+  logoutBtn.addEventListener("click", () => {
+    authToken = "";
+    localStorage.removeItem("cogniloop_auth_token");
+    localStorage.removeItem("cogniloop_session_id");
+    setSignedIn(null);
+    accountDashboard.hidden = true;
+  });
+  async function authenticate(action) {
+    authStatus.textContent = "Connecting to PostgreSQL…";
+    try {
+      const payload = { email: authEmail.value, password: authPassword.value };
+      if (action === "register") {
+        if (!authName.value.trim()) throw new Error("Enter your name to register");
+        payload.display_name = authName.value.trim(); payload.role = authRole.value;
+        payload.psychologist_id = psychologistSelect.value || null;
+      }
+      const response = await fetch(`/api/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not sign in");
+      authToken = result.token;
+      localStorage.setItem("cogniloop_auth_token", authToken);
+      authPassword.value = "";
+      setSignedIn(result.user);
+      if (result.user.role === "patient") localStorage.removeItem("cogniloop_session_id");
+      await loadDashboard();
+      if (result.user.role === "patient" && result.user.approval_status === "approved") executeCognitivePipeline(queryInput.value.trim());
+    } catch (error) { authStatus.textContent = error.message; }
+  }
+  async function loadDashboard() {
+    const response = await fetch("/api/dashboard", { headers: { "Authorization": `Bearer ${authToken}` } });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not load account");
+    setSignedIn(data.user);
+    accountDashboard.hidden = false;
+    if (data.user.role === "psychologist") {
+      const patientsHtml = data.patients.map((p) => `<div class="dashboard-row"><span>${escapeHtml(p.display_name)} · ${escapeHtml(p.email)} · ${escapeHtml(p.approval_status)}</span><span>${p.approval_status === "pending" ? `<button data-approve="${p.id}" data-decision="approved">Approve</button> <button data-approve="${p.id}" data-decision="declined">Decline</button>` : ""}${p.approval_status === "approved" ? ` <button data-export="${p.id}">Download conversations</button>` : ""}</span></div>`).join("") || "<p>No patients yet.</p>";
+      const appointmentsHtml = data.appointments.map((a) => `<div class="dashboard-row"><span>${escapeHtml(a.patient_name)} · ${new Date(a.requested_at).toLocaleString()} · ${escapeHtml(a.note)} · ${escapeHtml(a.status)}</span>${a.status === "pending" ? `<span><button data-appointment="${a.id}" data-decision="accepted">Accept</button> <button data-appointment="${a.id}" data-decision="declined">Decline</button></span>` : ""}</div>`).join("") || "<p>No appointment requests.</p>";
+      accountDashboard.innerHTML = `<h2>Psychologist dashboard</h2><h3>Patients</h3>${patientsHtml}<h3>Appointment requests</h3>${appointmentsHtml}`;
+    } else {
+      const appointmentsHtml = data.appointments.map((a) => `<div class="dashboard-row">${new Date(a.requested_at).toLocaleString()} · ${escapeHtml(a.status)}${a.note ? ` · ${escapeHtml(a.note)}` : ""}</div>`).join("") || "<p>No appointment requests yet.</p>";
+      accountDashboard.innerHTML = `<h2>Patient account</h2><p>Psychologist: ${escapeHtml(data.psychologist_name || "Not selected")}</p><p>Approval: ${escapeHtml(data.user.approval_status)}</p>${data.user.approval_status === "pending" ? "<p>Your psychologist must approve your account before chat and appointments are available.</p>" : data.user.approval_status === "declined" ? "<p>Your psychologist declined this request. Contact the clinic to resolve it.</p>" : `<form id="appointmentForm"><label>Request an appointment <input type="datetime-local" id="appointmentTime" required></label><input id="appointmentNote" type="text" maxlength="1000" placeholder="Optional note"><button type="submit">Send request</button></form>`}<h3>Appointment requests</h3>${appointmentsHtml}`;
+      const appointmentForm = document.getElementById("appointmentForm");
+      if (appointmentForm) appointmentForm.addEventListener("submit", requestAppointment);
+    }
+    accountDashboard.querySelectorAll("[data-approve]").forEach((button) => button.addEventListener("click", () => postAction("/api/patients/approval", { patient_id: button.dataset.approve, decision: button.dataset.decision })));
+    accountDashboard.querySelectorAll("[data-appointment]").forEach((button) => button.addEventListener("click", () => postAction("/api/appointments/respond", { appointment_id: button.dataset.appointment, decision: button.dataset.decision })));
+    accountDashboard.querySelectorAll("[data-export]").forEach((button) => button.addEventListener("click", () => downloadConversations(button.dataset.export)));
+    const refresh = document.createElement("button"); refresh.type = "button"; refresh.textContent = "Refresh dashboard";
+    refresh.addEventListener("click", () => loadDashboard()); accountDashboard.prepend(refresh);
+    return data;
+  }
+  async function postAction(url, body) {
+    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` }, body: JSON.stringify(body) });
+    const result = await response.json(); if (!response.ok) { alert(result.error || "Action failed"); return; } loadDashboard();
+  }
+  async function requestAppointment(event) {
+    event.preventDefault();
+    const requestedAt = new Date(document.getElementById("appointmentTime").value).toISOString();
+    await postAction("/api/appointments", { requested_at: requestedAt, note: document.getElementById("appointmentNote").value });
+  }
+  async function downloadConversations(patientId) {
+    const response = await fetch(`/api/patients/${patientId}/conversations.txt`, { headers: { "Authorization": `Bearer ${authToken}` } });
+    if (!response.ok) { const error = await response.json(); alert(error.error || "Export failed"); return; }
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = `patient-${patientId}-conversations.txt`; link.click(); URL.revokeObjectURL(url);
+  }
+  function escapeHtml(value) { return String(value || "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
   // DOM Elements
   const queryForm = document.getElementById("queryForm");
   const queryInput = document.getElementById("queryInput");
@@ -93,7 +192,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       await fetch("/api/config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
         body: JSON.stringify({ api_key: apiKey, model: selectedModel })
       });
     } catch (err) {
@@ -365,7 +464,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const base64Audio = await blobToBase64(audioBlob);
         const res = await fetch("/api/voice-transcribe", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
           body: JSON.stringify({
             audio: base64Audio,
             mime_type: audioBlob.type || "audio/webm",
@@ -507,9 +606,10 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const response = await fetch("/api/query", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${authToken}` },
         body: JSON.stringify({
           query: query,
+          session_id: localStorage.getItem("cogniloop_session_id"),
           api_key: apiKey,
           model: selectedModel
         })
@@ -520,6 +620,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const data = await response.json();
+      if (data.session_id) localStorage.setItem("cogniloop_session_id", data.session_id);
       renderResults(data);
     } catch (err) {
       console.error("Pipeline query error:", err);
@@ -767,5 +868,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Initial trigger for default scenario
-  executeCognitivePipeline(queryInput.value.trim());
+  if (authToken) {
+    loadDashboard().then((data) => {
+      if (data.user.role === "patient" && data.user.approval_status === "approved") executeCognitivePipeline(queryInput.value.trim());
+    }).catch(() => {
+      authToken = ""; localStorage.removeItem("cogniloop_auth_token"); setSignedIn(null);
+    });
+  }
 });

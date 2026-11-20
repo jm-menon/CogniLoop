@@ -55,6 +55,18 @@
 
   <!-- Main Container -->
   <main class="container main-content">
+    <section class="card input-card" id="authCard">
+      <div class="card-header"><div class="section-title-wrap"><span class="step-num">🔐</span><h2>Your CogniLoop account</h2></div><span class="hint-text" id="authStatus">Sign in or create an account to use cognitive analysis.</span></div>
+      <form id="authForm" class="query-form">
+        <div class="input-wrapper"><input id="authName" type="text" autocomplete="name" placeholder="Your name">
+          <input id="authEmail" type="email" autocomplete="email" placeholder="Email address" required>
+          <input id="authPassword" type="password" autocomplete="current-password" placeholder="Password (12 characters minimum)" required>
+          <select id="authRole"><option value="patient">Patient</option><option value="psychologist">Psychologist</option></select>
+          <select id="psychologistSelect"><option value="">Select your psychologist</option></select></div>
+        <div class="form-actions"><button type="submit" id="loginBtn" class="btn-primary">Sign in</button><button type="button" id="registerBtn" class="btn-primary">Create account</button><button type="button" id="logoutBtn" class="btn-primary hidden">Sign out</button></div>
+      </form>
+    </section>
+    <section class="card input-card" id="accountDashboard" hidden></section>
     
     <!-- Hero / Query Panel -->
     <section class="card input-card">

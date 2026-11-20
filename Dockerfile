@@ -13,6 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set working directory inside container
 WORKDIR /app
 
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
 # Copy application components
 COPY database/ ./database/
 COPY backend/ ./backend/
